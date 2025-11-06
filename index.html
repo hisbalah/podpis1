@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Plná moc – podpis (v8)</title>
+<title>Plná moc – podpis (v9)</title>
 <style>
   :root{ --brand:#0a58ff; }
   *{ box-sizing:border-box }
@@ -17,7 +17,7 @@
   input{ width:100%; padding:10px; border:1px solid #c9c9c9; border-radius:8px; font-size:16px }
   #pdfEmbed{ width:100%; height:540px; border:1px solid #d1d5db; border-radius:10px }
   #pdfCanvas, #finalCanvas, #filledCanvas{ width:100%; height:auto; border:1px solid #d1d5db; border-radius:10px }
-  #resultFrame{ width:100%; height:560px; border:1px solid #333; border-radius:10px }
+  #resultFrame, #finalFrame{ width:100%; height:560px; border:1px solid #333; border-radius:10px }
   /* Fullscreen signature modal */
   #sigModal{ position:fixed; inset:0; background:rgba(0,0,0,.18); display:none; align-items:center; justify-content:center; z-index:9999 }
   #sigWrap{ background:#fff; width:96vw; height:92vh; display:flex; flex-direction:column; gap:10px; border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,.25); padding:10px }
@@ -168,6 +168,16 @@
   let signaturePad = null;
 
   // Helpers
+  function xhrLoadArrayBuffer(url){
+    return new Promise((resolve, reject)=>{
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", url);
+      xhr.responseType = "arraybuffer";
+      xhr.onload = ()=> resolve(xhr.response);
+      xhr.onerror = ()=> reject(new Error("XHR PDF load failed"));
+      xhr.send();
+    });
+  }
   function blobUrl(bytes){ return URL.createObjectURL(new Blob([bytes], {type:"application/pdf"})); }
   function bytesToDataUrl(bytes){
     return new Promise(resolve=>{
@@ -177,7 +187,6 @@
       reader.readAsDataURL(blob);
     });
   }
-
   async function renderPdfToCanvas(srcOrBytes, canvas){
     const loadingTask = (typeof srcOrBytes === 'string')
       ? pdfjsLib.getDocument(srcOrBytes)
@@ -200,10 +209,7 @@
   // 2) Confirm form -> fill into PDF and show on same page
   btnConfirmForm.addEventListener('click', async ()=>{
     try{
-      const existingPdfBytes = await fetch('template.pdf').then(r=>{
-        if(!r.ok) throw new Error('template.pdf sa nenašiel');
-        return r.arrayBuffer();
-      });
+      const existingPdfBytes = await xhrLoadArrayBuffer('template.pdf');
 
       const { PDFDocument, StandardFonts } = PDFLib;
       const pdfDoc = await PDFDocument.load(existingPdfBytes);
@@ -217,27 +223,27 @@
       const place = document.getElementById('i_place').value;
       const date  = document.getElementById('i_date').value;
 
-      // positions – uprav podľa potreby
-      draw(name,  160, 655);
-      draw(addr,  160, 635);
-      draw(rc,    160, 615);
+      // VARIANTA B – zarovnanie doprava (doladíme spolu, hodnoty sú odhad A4)
+      draw(name,  160, 675);
+      draw(addr,  160, 655);
+      draw(rc,    160, 635);
       draw(place, 160, 515);
       if (date){
         const p = date.split('-');
-        draw(p[2]+'.'+p[1]+'.'+p[0], 310, 515);
+        draw(p[2]+'.'+p[1]+'.'+p[0], 305, 515);
       }
 
       filledPdfBytes = await pdfDoc.save();
-      const url = blobUrl(filledPdfBytes);
       if (isMobile) {
         document.getElementById('filledMobile').classList.remove('hidden');
         document.getElementById('filledDesktop').classList.add('hidden');
         await renderPdfToCanvas(filledPdfBytes, filledCanvas);
       } else {
+        const url = blobUrl(filledPdfBytes);
         resultFrame.src = url;
+        btnDownloadFilled.href = url;
       }
       btnDownloadFilled.classList.remove('hidden');
-      btnDownloadFilled.href = url;
       filledCard.classList.remove('hidden');
       window.scrollTo({ top: filledCard.offsetTop - 8, behavior: 'smooth' });
     }catch(e){
@@ -254,14 +260,20 @@
 
   btnSign.addEventListener('click', ()=>{
     sigModal.style.display = 'flex';
-    const dpr = Math.max(window.devicePixelRatio || 1, 1);
-    sigCanvas.width  = Math.floor(window.innerWidth  * 0.94 * dpr);
-    sigCanvas.height = Math.floor(window.innerHeight * 0.78 * dpr);
-    sigCanvas.style.width  = Math.floor(window.innerWidth  * 0.94) + 'px';
-    sigCanvas.style.height = Math.floor(window.innerHeight * 0.78) + 'px';
+    // Proper DPR scaling on iOS/Android
+    const ratio = Math.max(window.devicePixelRatio || 1, 1);
+    const cssW = Math.floor(window.innerWidth  * 0.94);
+    const cssH = Math.floor(window.innerHeight * 0.78);
+    sigCanvas.width  = cssW * ratio;
+    sigCanvas.height = cssH * ratio;
+    sigCanvas.style.width  = cssW + 'px';
+    sigCanvas.style.height = cssH + 'px';
+    const ctx = sigCanvas.getContext('2d');
+    ctx.scale(ratio, ratio);
+
     signaturePad = new SignaturePad(sigCanvas, {
       penColor: "#0a58ff",
-      minWidth: 2.5,   // HRUBŠÍ PODPIS
+      minWidth: 2.5,   // HRUBÝ podpis
       maxWidth: 4.5
     });
   });
@@ -279,32 +291,32 @@
       const pdfDoc = await PDFDocument.load(filledPdfBytes);
       const page = pdfDoc.getPages()[0];
 
-      // podpis medzi "Splnomocnenec" a bodkovanú čiaru (dolaď podľa PDF)
+      // podpis medzi "Splnomocnenec" a bodkovanú čiaru – jemne posunieme podľa reality
       const sigImg = await pdfDoc.embedPng(sigDataUrl);
       page.drawImage(sigImg, {
         x: 365,
-        y: 460,
-        width: 180,   // trochu širší pre hrubší ťah
-        height: 85
+        y: 458,
+        width: 185,
+        height: 88
       });
 
       finalPdfBytes = await pdfDoc.save();
 
-      const url = blobUrl(finalPdfBytes);
       if (isMobile) {
         document.getElementById('finalMobile').classList.remove('hidden');
         document.getElementById('finalDesktop').classList.add('hidden');
         await renderPdfToCanvas(finalPdfBytes, finalCanvas);
       } else {
+        const url = blobUrl(finalPdfBytes);
         finalFrame.src = url;
+        document.getElementById('btnDownloadFinal').href = url;
       }
-      btnDownloadFinal.href = url;
-      finalCard.classList.remove('hidden');
+      document.getElementById('finalCard').classList.remove('hidden');
       sigModal.style.display = 'none';
       window.scrollTo({ top: finalCard.offsetTop - 8, behavior: 'smooth' });
 
-      // Email (agent + optional client), pomocou FileReader (žiadny stack overflow)
-      const dataUrl = await bytesToDataUrl(finalPdfBytes); // data:application/pdf;base64,....
+      // Email (agent + optional client) – cez FileReader, bez stack overflow
+      const dataUrl = await bytesToDataUrl(finalPdfBytes);
       const base64 = dataUrl.split(',')[1] || '';
       const params = {
         client_email: (document.getElementById('i_client_email').value || '').trim(),
@@ -316,6 +328,11 @@
         .then(()=>{})
         .catch(err=>console.warn('EmailJS error:', err));
 
+      // Set download link on mobile too
+      if (isMobile) {
+        const url = blobUrl(finalPdfBytes);
+        document.getElementById('btnDownloadFinal').href = url;
+      }
     }catch(e){
       alert('Chyba pri finálnom podpise: ' + e.message);
     }
