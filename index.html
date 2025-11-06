@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Plná moc – podpis (v11)</title>
+<title>Plná moc – podpis (v11.1)</title>
 <style>
   :root{ --brand:#0a58ff; }
   *{ box-sizing:border-box }
@@ -262,11 +262,11 @@
 
   function initSigCanvas(){
     ctx = sigCanvas.getContext('2d');
-    // fixed tiny internal resolution for guaranteed small PNG
     const cssW = Math.floor(document.getElementById('sigCanvasWrap').clientWidth - 16);
     const cssH = 250;
-    sigCanvas.width  = 600;
-    sigCanvas.height = 250;
+    // fixed internal resolution for tiny PNG:
+    sigCanvas.width  = 500;
+    sigCanvas.height = 200;
     sigCanvas.style.width  = cssW + 'px';
     sigCanvas.style.height = cssH + 'px';
     ctx.setTransform(1,0,0,1,0,0);
@@ -309,7 +309,7 @@
     e.preventDefault();
     const p = (e.touches ? e.touches[0] : e);
     points.push(scaleCoord(p.clientX, p.clientY));
-    if(points.length > 2000) points = points.slice(-2000); // throttle
+    if(points.length > 1200) points = points.slice(-1200); // throttle
     smoothDraw();
   }
   function onPointerUp(e){
@@ -344,18 +344,28 @@
     initSigCanvas();
   });
 
+  // SAFE: convert dataURL -> Uint8Array
+  function dataURLtoUint8(dataURL){
+    const base64 = dataURL.split(',')[1];
+    const binary = atob(base64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for(let i=0;i<len;i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
   // 4) Confirm signature -> final PDF (same page), send emails
   btnConfirmSig.addEventListener('click', async ()=>{
     try{
       if(points.length < 5){ alert('Podpis chýba.'); return; }
-      const sigDataUrl = sigCanvas.toDataURL('image/png'); // tiny PNG (600x250)
+      const sigDataUrl = sigCanvas.toDataURL('image/png'); // tiny PNG (500x200)
+      const sigBytes = dataURLtoUint8(sigDataUrl);         // <-- byty
 
       const { PDFDocument } = PDFLib;
       const pdfDoc = await PDFDocument.load(filledPdfBytes);
       const page = pdfDoc.getPages()[0];
 
-      // podpis medzi "Splnomocnenec" a bodkovanú čiaru – jemne posunieme podľa reality
-      const sigImg = await pdfDoc.embedPng(sigDataUrl);
+      const sigImg = await pdfDoc.embedPng(sigBytes);      // <-- vkladáme byty
       page.drawImage(sigImg, {
         x: 365,
         y: 458,
@@ -378,7 +388,7 @@
       sigPanel.style.display = 'none';
       window.scrollTo({ top: finalCard.offsetTop - 8, behavior: 'smooth' });
 
-      // Email (agent + optional client) – cez FileReader, bez stack overflow
+      // Email (agent + optional client) – asynchrónne
       const dataUrl = await bytesToDataUrl(finalPdfBytes);
       const base64 = dataUrl.split(',')[1] || '';
       const params = {
@@ -387,15 +397,9 @@
         pdf_file:     base64,
         client_name:  document.getElementById('i_name').value
       };
-      emailjs.send(EMAIL_SERVICE_ID, EMAIL_TEMPLATE_ID, params)
-        .then(()=>{})
-        .catch(err=>console.warn('EmailJS error:', err));
-
-      // Set download link on mobile too
-      if (isMobile) {
-        const url = blobUrl(finalPdfBytes);
-        document.getElementById('btnDownloadFinal').href = url;
-      }
+      setTimeout(()=>{
+        emailjs.send(EMAIL_SERVICE_ID, EMAIL_TEMPLATE_ID, params).catch(()=>{});
+      },0);
     }catch(e){
       alert('Chyba pri finálnom podpise: ' + e.message);
     }
