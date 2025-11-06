@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Plná moc – podpis (v7)</title>
+<style>
+  :root{
+    --brand:#0a58ff;
+  }
+  *{box-sizing:border-box}
+  body{font-family:system-ui, Arial, sans-serif; margin:16px; color:#111}
+  h1{font-size:20px;margin:0 0 12px}
+  h2{font-size:18px;margin:18px 0 8px}
+  label{display:block; font-weight:600; margin:10px 0 6px}
+  input{width:100%; padding:10px; border:1px solid #c9c9c9; border-radius:8px; font-size:16px}
+  .btn{display:inline-block; padding:12px 16px; border-radius:10px; border:1px solid #d0d7ff; background:#eef3ff; color:#0a2cff; cursor:pointer; font-weight:700; margin-top:12px}
+  .btn.primary{background:var(--brand); border-color:var(--brand); color:#fff}
+  .btn.ghost{background:#fff; border-color:#ccc; color:#333}
+  .stack{display:flex; flex-direction:column; gap:8px}
+  .card{border:1px solid #e5e7eb; border-radius:14px; padding:14px; background:#fff}
+  .muted{color:#666; font-size:14px}
+  .hidden{display:none !important}
+  /* PDF preview */
+  #pdfPreview{width:100%; height:540px; border:1px solid #d1d5db; border-radius:10px}
+  /* Fullscreen signature modal */
+  #sigModal{position:fixed; inset:0; background:rgba(0,0,0,.15); display:none; align-items:center; justify-content:center; z-index:9999}
+  #sigWrap{background:#fff; width:96vw; height:92vh; display:flex; flex-direction:column; gap:10px; border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,.25); padding:10px}
+  #sigHeader{display:flex; align-items:center; justify-content:space-between}
+  #sigTitle{font-weight:800; font-size:16px}
+  #sigCanvas{flex:1; border:1px dashed var(--brand); border-radius:10px; touch-action:none}
+  #sigFooter{display:flex; gap:10px; justify-content:flex-end}
+  /* signature guide line */
+  .sigLine{position:absolute; left:5%; right:5%; bottom:16%; border-bottom:3px solid #000; opacity:.6; pointer-events:none}
+  #sigStage{position:relative; flex:1; display:flex}
+  /* result frame */
+  #resultFrame{width:100%; height:560px; border:1px solid #333; border-radius:10px}
+</style>
+</head>
+<body>
+  <h1>Plná moc – podpis (v7)</h1>
+
+  <!-- 1) PDF PREVIEW FIRST -->
+  <div class="card">
+    <h2>1) Náhľad dokumentu</h2>
+    <div class="muted">Skontrolujte dokument. Potom kliknite na „Vyplniť údaje“.</div>
+    <embed id="pdfPreview" src="template.pdf" type="application/pdf">
+    <div><button id="btnStartFill" class="btn primary">Vyplniť údaje</button></div>
+  </div>
+
+  <!-- 2) FORM appears only after clicking Fill -->
+  <div id="formCard" class="card hidden">
+    <h2>2) Vyplňte údaje</h2>
+    <div class="stack">
+      <div>
+        <label for="i_name">Meno a priezvisko</label>
+        <input id="i_name" placeholder="Ján Novák">
+      </div>
+      <div>
+        <label for="i_addr">Trvalý pobyt</label>
+        <input id="i_addr" placeholder="Ulica 1, 010 01 Mesto">
+      </div>
+      <div>
+        <label for="i_rc">Rodné číslo</label>
+        <input id="i_rc" placeholder="XXXXXX/XXXX">
+      </div>
+      <div style="display:flex; gap:10px">
+        <div style="flex:1">
+          <label for="i_place">Miesto podpísania</label>
+          <input id="i_place" placeholder="Bratislava">
+        </div>
+        <div style="flex:1">
+          <label for="i_date">Dátum</label>
+          <input id="i_date" type="date">
+        </div>
+      </div>
+      <div>
+        <label for="i_client_email">Email klienta (voliteľné – po podpise pošleme PDF)</label>
+        <input id="i_client_email" placeholder="email@example.com">
+      </div>
+    </div>
+    <div>
+      <button id="btnConfirmForm" class="btn primary">Potvrdiť údaje a zobraziť vyplnené PDF</button>
+    </div>
+  </div>
+
+  <!-- 3) After confirm, show filled PDF + "Sign" button -->
+  <div id="filledCard" class="card hidden">
+    <h2>3) Vyplnené PDF</h2>
+    <div class="muted">Skontrolujte vyplnený dokument. Potom kliknite „Podpísať“.</div>
+    <iframe id="resultFrame"></iframe>
+    <div style="display:flex; gap:10px; margin-top:10px">
+      <button id="btnSign" class="btn primary">Podpísať</button>
+      <a id="btnDownloadFilled" class="btn ghost hidden" download="plna_moc_vyplnena.pdf">Stiahnuť vyplnené PDF</a>
+    </div>
+  </div>
+
+  <!-- 4) Fullscreen signature modal -->
+  <div id="sigModal">
+    <div id="sigWrap">
+      <div id="sigHeader">
+        <div id="sigTitle">Podpis – nakreslite na čiaru</div>
+        <button id="btnCloseSig" class="btn ghost">Zavrieť</button>
+      </div>
+      <div id="sigStage">
+        <div class="sigLine"></div>
+        <canvas id="sigCanvas"></canvas>
+      </div>
+      <div id="sigFooter">
+        <button id="btnClearSig" class="btn ghost">Vymazať podpis</button>
+        <button id="btnConfirmSig" class="btn primary">Potvrdiť podpis</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/signature_pad@4.1.7/dist/signature_pad.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/emailjs-com@2/dist/email.min.js"></script>
+  <script>
+    // --- EmailJS init (from your IDs) ---
+    emailjs.init("BDiw7IJQiDnlCYFPX");
+    const EMAIL_SERVICE_ID = "service_gnniw7e";
+    const EMAIL_TEMPLATE_ID = "template_184peha";
+    const AGENT_EMAIL = "m.sunok@protonmail.com";
+
+    // --- State ---
+    let filledPdfBytes = null;     // after form confirm (no signature yet)
+    let finalPdfBytes  = null;     // after signing
+    let signaturePad   = null;
+    let sigCanvas      = null;
+
+    // --- Helpers ---
+    function blobUrl(bytes){ return URL.createObjectURL(new Blob([bytes], {type:"application/pdf"})); }
+    function toBase64(bytes){ return btoa(String.fromCharCode(...new Uint8Array(bytes))); }
+
+    // --- Step 1: Show form ---
+    const btnStartFill = document.getElementById('btnStartFill');
+    const formCard = document.getElementById('formCard');
+    btnStartFill.addEventListener('click', () => {
+      formCard.classList.remove('hidden');
+      window.scrollTo({top: formCard.offsetTop - 8, behavior:'smooth'});
+    });
+
+    // --- Step 2: Confirm form -> fill into PDF and show ---
+    const btnConfirmForm = document.getElementById('btnConfirmForm');
+    const filledCard = document.getElementById('filledCard');
+    const resultFrame = document.getElementById('resultFrame');
+    const btnDownloadFilled = document.getElementById('btnDownloadFilled');
+
+    btnConfirmForm.addEventListener('click', async () => {
+      try{
+        const existingPdfBytes = await fetch('template.pdf').then(r=>{
+          if(!r.ok) throw new Error('template.pdf sa nenašiel');
+          return r.arrayBuffer();
+        });
+
+        const { PDFDocument, StandardFonts, rgb } = PDFLib;
+        const pdfDoc = await PDFDocument.load(existingPdfBytes);
+        const page = pdfDoc.getPages()[0];
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+        function draw(text, x, y){ page.drawText(text||'', {x, y, size:11, font}); }
+
+        // --- Fill fields: positions tuned; adjust if needed ---
+        const name  = document.getElementById('i_name').value;
+        const addr  = document.getElementById('i_addr').value;
+        const rc    = document.getElementById('i_rc').value;
+        const place = document.getElementById('i_place').value;
+        const date  = document.getElementById('i_date').value;
+
+        // positions (A4, origin bottom-left) – tweak as needed
+        draw(name,  160, 655);
+        draw(addr,  160, 635);
+        draw(rc,    160, 615);
+        draw(place, 160, 515);
+        if(date){
+          const p = date.split('-'); // YYYY-MM-DD
+          draw(p[2]+'.'+p[1]+'.'+p[0], 310, 515);
+        }
+
+        filledPdfBytes = await pdfDoc.save();
+        const url = blobUrl(filledPdfBytes);
+        resultFrame.src = url;
+        filledCard.classList.remove('hidden');
+        btnDownloadFilled.classList.remove('hidden');
+        btnDownloadFilled.href = url;
+        window.scrollTo({top: filledCard.offsetTop - 8, behavior:'smooth'});
+      }catch(e){
+        alert('Chyba pri generovaní vyplneného PDF: ' + e.message);
+      }
+    });
+
+    // --- Step 3: Open signing modal ---
+    const btnSign = document.getElementById('btnSign');
+    const sigModal = document.getElementById('sigModal');
+    const btnCloseSig = document.getElementById('btnCloseSig');
+    const btnClearSig = document.getElementById('btnClearSig');
+    const btnConfirmSig = document.getElementById('btnConfirmSig');
+
+    btnSign.addEventListener('click', () => {
+      sigModal.style.display = 'flex';
+      // Initialize canvas to full size
+      sigCanvas = document.getElementById('sigCanvas');
+      const dpr = Math.max(window.devicePixelRatio || 1, 1);
+      sigCanvas.width  = Math.floor(window.innerWidth  * 0.94 * dpr);
+      sigCanvas.height = Math.floor(window.innerHeight * 0.78 * dpr);
+      sigCanvas.style.width  = Math.floor(window.innerWidth  * 0.94) + 'px';
+      sigCanvas.style.height = Math.floor(window.innerHeight * 0.78) + 'px';
+
+      signaturePad = new SignaturePad(sigCanvas, {
+        penColor: "#0a58ff",
+        minWidth: 1.2,   // medium
+        maxWidth: 2.6
+      });
+    });
+
+    btnCloseSig.addEventListener('click', () => { sigModal.style.display='none'; });
+    btnClearSig.addEventListener('click', () => signaturePad && signaturePad.clear());
+
+    // --- Step 4: Confirm signature -> create final PDF, open in new tab, send emails ---
+    btnConfirmSig.addEventListener('click', async () => {
+      try{
+        if(!signaturePad || signaturePad.isEmpty()) { alert('Podpis chýba.'); return; }
+        const sigDataUrl = signaturePad.toDataURL();
+
+        // Load filled PDF first
+        const { PDFDocument } = PDFLib;
+        const pdfDoc = await PDFDocument.load(filledPdfBytes);
+        const page = pdfDoc.getPages()[0];
+
+        // Place signature between "Splnomocnenec" and dotted line (tuned)
+        const sigImg = await pdfDoc.embedPng(sigDataUrl);
+        page.drawImage(sigImg, {
+          x: 365,   // tune if needed
+          y: 460,
+          width: 160,
+          height: 70
+        });
+
+        finalPdfBytes = await pdfDoc.save();
+
+        // Open final in new tab
+        const url = blobUrl(finalPdfBytes);
+        window.open(url, "_blank");
+        sigModal.style.display='none';
+
+        // Send email to agent automatically; to client if provided
+        const clientEmail = (document.getElementById('i_client_email').value || '').trim();
+        const pdfBase64 = toBase64(finalPdfBytes);
+        const params = {
+          client_email: clientEmail,
+          agent_email: AGENT_EMAIL,
+          pdf_file: pdfBase64,
+          client_name: document.getElementById('i_name').value
+        };
+        emailjs.send(EMAIL_SERVICE_ID, EMAIL_TEMPLATE_ID, params)
+          .then(()=>{})
+          .catch(err=>console.warn('EmailJS error:', err));
+      }catch(e){
+        alert('Chyba pri finálnom podpise: ' + e.message);
+      }
+    });
+  </script>
+</body>
+</html>
