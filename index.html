@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Plná moc – podpis (v10)</title>
+<title>Plná moc – podpis (v11)</title>
 <style>
   :root{ --brand:#0a58ff; }
   *{ box-sizing:border-box }
@@ -18,13 +18,13 @@
   #pdfEmbed{ width:100%; height:540px; border:1px solid #d1d5db; border-radius:10px }
   #pdfCanvas, #finalCanvas, #filledCanvas{ width:100%; height:auto; border:1px solid #d1d5db; border-radius:10px }
   #resultFrame, #finalFrame{ width:100%; height:560px; border:1px solid #333; border-radius:10px }
-  /* Signature panel (not fullscreen) */
+  /* Signature panel (custom engine) */
   #sigPanel{ position:fixed; left:0; right:0; bottom:0; top:0; background:rgba(0,0,0,.2); display:none; align-items:center; justify-content:center; z-index:9999 }
   #sigBox{ width:min(960px, 96vw); background:#fff; border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,.25); padding:12px; display:flex; flex-direction:column; gap:10px }
   #sigHeader{ display:flex; align-items:center; justify-content:space-between }
   #sigCanvasWrap{ border:1px dashed var(--brand); border-radius:10px; position:relative; padding:8px }
-  #sigCanvas{ width:100%; height:300px; display:block; touch-action:none }
-  .sigLine{ position:absolute; left:5%; right:5%; bottom:22px; border-bottom:3px solid #000; opacity:.6; pointer-events:none }
+  #sigCanvas{ width:100%; height:250px; display:block; touch-action:none; background:#fff }
+  .sigLine{ position:absolute; left:5%; right:5%; bottom:20px; border-bottom:3px solid #000; opacity:.55; pointer-events:none }
   #sigFooter{ display:flex; gap:10px; justify-content:flex-end }
 </style>
 </head>
@@ -88,7 +88,7 @@
   </div>
 </div>
 
-<!-- 4) Signature panel (full-width, 300px height) -->
+<!-- 4) Signature panel (custom engine, width 100%, height 250px) -->
 <div id="sigPanel">
   <div id="sigBox">
     <div id="sigHeader">
@@ -123,7 +123,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/signature_pad@4.1.7/dist/signature_pad.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/emailjs-com@2/dist/email.min.js"></script>
 <script>
   // --- EmailJS ---
@@ -165,7 +164,6 @@
   // State
   let filledPdfBytes = null;
   let finalPdfBytes  = null;
-  let signaturePad = null;
 
   // Helpers
   function xhrLoadArrayBuffer(url){
@@ -251,60 +249,106 @@
     }
   });
 
-  // 3) Signature panel (FULLWIDTH × 300px height) with proper DPR scaling
+  // ===== Custom Signature Engine (smooth quadratic curves) =====
   const sigPanel   = document.getElementById('sigPanel');
   const sigCanvas  = document.getElementById('sigCanvas');
   const btnCloseSig= document.getElementById('btnCloseSig');
   const btnClearSig= document.getElementById('btnClearSig');
   const btnConfirmSig = document.getElementById('btnConfirmSig');
 
-  btnSign.addEventListener('click', ()=>{
-    sigPanel.style.display = 'flex';
-    prepareSigCanvas();
-  });
+  let ctx = null;
+  let drawing = false;
+  let points = []; // {x,y}
 
-  function prepareSigCanvas(){
-    const ratio = Math.max(window.devicePixelRatio || 1, 1);
+  function initSigCanvas(){
+    ctx = sigCanvas.getContext('2d');
+    // fixed tiny internal resolution for guaranteed small PNG
     const cssW = Math.floor(document.getElementById('sigCanvasWrap').clientWidth - 16);
-    const cssH = 300;
-    sigCanvas.width  = cssW * ratio;
-    sigCanvas.height = cssH * ratio;
+    const cssH = 250;
+    sigCanvas.width  = 600;
+    sigCanvas.height = 250;
     sigCanvas.style.width  = cssW + 'px';
     sigCanvas.style.height = cssH + 'px';
-    const ctx = sigCanvas.getContext('2d');
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0); // correct DPI
-
-    signaturePad = new SignaturePad(sigCanvas, {
-      penColor: "#0a58ff",
-      minWidth: 3.5,   // ešte hrubší podpis
-      maxWidth: 5.5
-    });
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,sigCanvas.width, sigCanvas.height);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#0a58ff';
+    ctx.lineWidth = 4.5; // hrubé pero
   }
 
-  btnCloseSig.addEventListener('click', ()=>{ sigPanel.style.display = 'none'; });
-  btnClearSig.addEventListener('click', ()=> signaturePad && signaturePad.clear());
-
-  // Resize signature PNG to max width 600px to avoid huge base64 on Android/iOS
-  function getResizedSignatureDataURL(){
-    const srcCanvas = sigCanvas;
-    // bounding box: export full canvas, then scale down if needed
-    const maxW = 600;
-    const scale = Math.min(1, maxW / srcCanvas.width);
-    const dstW = Math.floor(srcCanvas.width * scale);
-    const dstH = Math.floor(srcCanvas.height * scale);
-    const off = document.createElement('canvas');
-    off.width = dstW;
-    off.height = dstH;
-    const octx = off.getContext('2d');
-    octx.drawImage(srcCanvas, 0, 0, dstW, dstH);
-    return off.toDataURL('image/png'); // smaller PNG
+  function scaleCoord(clientX, clientY){
+    const rect = sigCanvas.getBoundingClientRect();
+    const x = (clientX - rect.left) * (sigCanvas.width  / rect.width);
+    const y = (clientY - rect.top)  * (sigCanvas.height / rect.height);
+    return {x,y};
   }
+
+  function smoothDraw(){
+    if(points.length < 2) return;
+    ctx.clearRect(0,0,sigCanvas.width, sigCanvas.height);
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for(let i=1;i<points.length-1;i++){
+      const xc = (points[i].x + points[i+1].x)/2;
+      const yc = (points[i].y + points[i+1].y)/2;
+      ctx.quadraticCurveTo(points[i].x, points[i].y, xc, yc);
+    }
+    ctx.stroke();
+  }
+
+  function onPointerDown(e){
+    e.preventDefault();
+    drawing = true;
+    points = [];
+    const p = (e.touches ? e.touches[0] : e);
+    points.push(scaleCoord(p.clientX, p.clientY));
+  }
+  function onPointerMove(e){
+    if(!drawing) return;
+    e.preventDefault();
+    const p = (e.touches ? e.touches[0] : e);
+    points.push(scaleCoord(p.clientX, p.clientY));
+    if(points.length > 2000) points = points.slice(-2000); // throttle
+    smoothDraw();
+  }
+  function onPointerUp(e){
+    if(!drawing) return;
+    e.preventDefault();
+    drawing = false;
+    smoothDraw();
+  }
+
+  function attachSigEvents(){
+    sigCanvas.addEventListener('mousedown', onPointerDown, {passive:false});
+    sigCanvas.addEventListener('mousemove', onPointerMove, {passive:false});
+    document.addEventListener('mouseup', onPointerUp, {passive:false});
+
+    sigCanvas.addEventListener('touchstart', onPointerDown, {passive:false});
+    sigCanvas.addEventListener('touchmove', onPointerMove, {passive:false});
+    sigCanvas.addEventListener('touchend', onPointerUp, {passive:false});
+  }
+
+  document.getElementById('btnSign').addEventListener('click', ()=>{
+    sigPanel.style.display = 'flex';
+    initSigCanvas();
+    attachSigEvents();
+  });
+
+  document.getElementById('btnCloseSig').addEventListener('click', ()=>{
+    sigPanel.style.display = 'none';
+  });
+
+  document.getElementById('btnClearSig').addEventListener('click', ()=>{
+    points = [];
+    initSigCanvas();
+  });
 
   // 4) Confirm signature -> final PDF (same page), send emails
   btnConfirmSig.addEventListener('click', async ()=>{
     try{
-      if (!signaturePad || signaturePad.isEmpty()) { alert('Podpis chýba.'); return; }
-      const sigDataUrl = getResizedSignatureDataURL(); // resized PNG
+      if(points.length < 5){ alert('Podpis chýba.'); return; }
+      const sigDataUrl = sigCanvas.toDataURL('image/png'); // tiny PNG (600x250)
 
       const { PDFDocument } = PDFLib;
       const pdfDoc = await PDFDocument.load(filledPdfBytes);
@@ -316,7 +360,7 @@
         x: 365,
         y: 458,
         width: 185,
-        height: 88
+        height: 77
       });
 
       finalPdfBytes = await pdfDoc.save();
